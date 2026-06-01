@@ -60,6 +60,7 @@ button {
   transition: background 0.15s;
 }
 button:hover { background: #6b7af8; }
+button:disabled { opacity: 0.4; cursor: not-allowed; }
 button.ghost {
   background: #23232e;
   color: #aaa;
@@ -86,11 +87,7 @@ input[type="range"] {
   min-width: 88px;
   text-align: right;
 }
-.auto-hint {
-  font-size: 0.76rem;
-  color: #444;
-  margin-top: 4px;
-}
+.auto-hint { font-size: 0.76rem; color: #444; margin-top: 4px; }
 .auto-hint span { color: #5b6af0; }
 
 table { width: 100%; border-collapse: collapse; }
@@ -108,18 +105,48 @@ td { padding: 11px 12px; border-top: 1px solid #1e1e28; vertical-align: middle; 
 .td-score { font-family: monospace; color: #666; font-size: 0.92rem; }
 .td-pct { font-family: monospace; font-weight: 700; font-size: 1rem; }
 .td-tickets { font-family: monospace; color: #888; text-align: right; white-space: nowrap; }
-
-.bar-wrap {
-  background: #0f0f13;
-  border-radius: 4px;
-  height: 6px;
-  overflow: hidden;
-  margin-top: 5px;
-  min-width: 60px;
-}
+.bar-wrap { background: #0f0f13; border-radius: 4px; height: 6px; overflow: hidden; margin-top: 5px; min-width: 60px; }
 .bar-fill { height: 100%; border-radius: 4px; transition: width 0.25s ease; }
 
 .error { color: #f06b6b; font-size: 0.82rem; margin-top: 8px; min-height: 18px; }
+
+/* 시뮬레이션 테이블 */
+.sim-table { width:100%; border-collapse:collapse; margin:14px 0 10px; }
+.sim-table th { font-size:0.72rem; color:#555; text-transform:uppercase; letter-spacing:0.05em; padding:0 10px 8px; text-align:left; }
+.sim-table td { padding:9px 10px; border-top:1px solid #1e1e28; font-size:0.88rem; }
+.sim-ok   { color:#4ecb8d; }
+.sim-warn { color:#f0b84e; }
+.sim-info { font-size:0.75rem; color:#444; margin-bottom:12px; }
+
+/* 돌림판 */
+.wheel-wrap {
+  display: flex;
+  justify-content: center;
+  padding: 8px 0 16px;
+}
+#wheel-canvas {
+  width: 100%;
+  max-width: 360px;
+  height: auto;
+  display: block;
+}
+.spin-btn-wrap { text-align: center; margin-bottom: 16px; }
+#spin-btn { font-size: 1rem; padding: 12px 40px; letter-spacing: 0.02em; }
+
+.winner-box {
+  border: 2px solid;
+  border-radius: 10px;
+  padding: 16px 20px;
+  margin-top: 4px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  animation: fadeIn 0.4s ease;
+}
+@keyframes fadeIn { from { opacity:0; transform:translateY(6px); } to { opacity:1; transform:none; } }
+.winner-label { font-size: 0.7rem; color: #666; text-transform: uppercase; letter-spacing: 0.08em; white-space: nowrap; }
+.winner-name { font-size: 1.5rem; font-weight: 700; }
+.winner-score { font-family: monospace; color: #555; font-size: 0.9rem; margin-left: auto; }
 </style>
 </head>
 <body>
@@ -155,14 +182,24 @@ td { padding: 11px 12px; border-top: 1px solid #1e1e28; vertical-align: middle; 
     <table>
       <thead>
         <tr>
-          <th>후보</th>
-          <th>점수</th>
-          <th colspan="2">당첨 확률</th>
-          <th>추첨권</th>
+          <th>후보</th><th>점수</th><th colspan="2">당첨 확률</th><th>추첨권</th>
         </tr>
       </thead>
       <tbody id="result-body"></tbody>
     </table>
+  </div>
+
+  <div class="card" id="wheel-card" style="display:none">
+    <span class="section-label">돌림판</span>
+    <div class="wheel-wrap">
+      <canvas id="wheel-canvas" width="360" height="380"></canvas>
+    </div>
+    <div class="spin-btn-wrap" style="display:flex;gap:10px;justify-content:center;">
+      <button id="sim-btn" onclick="runSimulation()" class="ghost">시뮬레이션 후 추첨</button>
+      <button id="spin-btn" onclick="spin()">돌리기</button>
+    </div>
+    <div id="sim-display"></div>
+    <div id="winner-display"></div>
   </div>
 </div>
 
@@ -171,9 +208,14 @@ const COLORS = ['#5b6af0','#f06b6b','#4ecb8d','#f0b84e','#c06bf0','#4ec5f0','#f0
 
 let scores = [];
 let names  = [];
+let currentProbs = [];
 
+let wheelRotation = 0;
+let isSpinning    = false;
+
+/* ── 파싱 ── */
 function parseScores() {
-  const raw = document.getElementById('scores-input').value;
+  const raw   = document.getElementById('scores-input').value;
   const parts = raw.split(',').map(s => s.trim()).filter(Boolean);
   if (parts.length < 2) throw new Error('후보가 2명 이상이어야 합니다');
   const parsed = parts.map(Number);
@@ -181,7 +223,6 @@ function parseScores() {
   if (parsed.some(s => s >= 0)) throw new Error('모든 점수는 음수여야 합니다');
   return parsed;
 }
-
 function parseNames(count) {
   const raw = document.getElementById('names-input').value.trim();
   if (!raw) return Array.from({length: count}, (_, i) => String.fromCharCode(65 + i));
@@ -189,35 +230,35 @@ function parseNames(count) {
   return Array.from({length: count}, (_, i) => parts[i] || String.fromCharCode(65 + i));
 }
 
-function softmax(scores, T) {
-  const scaled = scores.map(s => s * T);
-  const maxVal  = Math.max(...scaled);
-  const exps    = scaled.map(s => Math.exp(s - maxVal));
-  const sum     = exps.reduce((a, b) => a + b, 0);
+/* ── Softmax ── */
+function softmax(sc, T) {
+  const scaled = sc.map(s => s * T);
+  const mx     = Math.max(...scaled);
+  const exps   = scaled.map(s => Math.exp(s - mx));
+  const sum    = exps.reduce((a, b) => a + b, 0);
   return exps.map(e => e / sum);
 }
 
-// log scale: slider 0 → T=1e-6 / slider 1000 → T=0.1
+/* ── T 슬라이더 ── */
 function sliderToT(v) { return Math.pow(10, v / 1000 * 5 - 6); }
 function tToSlider(T) { return Math.round((Math.log10(T) + 6) / 5 * 1000); }
 
 function autoT() {
   if (!scores.length) { calculate(); return; }
   const abss = scores.map(Math.abs);
-  const diff  = Math.max(...abss) - Math.min(...abss);
+  const diff = Math.max(...abss) - Math.min(...abss);
   if (diff === 0) return;
-  const T  = 1 / diff;
-  const sv = Math.max(0, Math.min(1000, tToSlider(T)));
+  const sv = Math.max(0, Math.min(1000, tToSlider(1 / diff)));
   document.getElementById('t-slider').value = sv;
   onSlider();
 }
-
 function onSlider() {
   const T = sliderToT(+document.getElementById('t-slider').value);
   document.getElementById('t-display').textContent = T.toExponential(3);
   if (scores.length) render(T);
 }
 
+/* ── 계산 ── */
 function calculate() {
   document.getElementById('error').textContent = '';
   try {
@@ -228,12 +269,12 @@ function calculate() {
     const diff   = Math.max(...abss) - Math.min(...abss);
     const autoTv = diff > 0 ? 1 / diff : null;
     document.getElementById('auto-hint').innerHTML = autoTv
-      ? `권장 T: <span>${autoTv.toExponential(3)}</span>  —  점수 범위(${diff})에서 자동 계산`
-      : '';
+      ? `권장 T: <span>${autoTv.toExponential(3)}</span>  —  점수 범위(${diff})에서 자동 계산` : '';
 
     document.getElementById('result-card').style.display = 'block';
+    document.getElementById('wheel-card').style.display  = 'block';
+    document.getElementById('winner-display').innerHTML  = '';
 
-    // 처음 계산 시 권장 T로 슬라이더 세팅
     if (autoTv) {
       const sv = Math.max(0, Math.min(1000, tToSlider(autoTv)));
       document.getElementById('t-slider').value = sv;
@@ -244,14 +285,15 @@ function calculate() {
   }
 }
 
+/* ── 결과 테이블 렌더 ── */
 function render(T) {
-  const probs   = softmax(scores, T);
-  const tickets = probs.map(p => Math.round(p * 100));
+  currentProbs = softmax(scores, T);
+  const tickets = currentProbs.map(p => Math.round(p * 100));
   const tbody   = document.getElementById('result-body');
   tbody.innerHTML = '';
 
   scores.forEach((score, i) => {
-    const pct   = (probs[i] * 100).toFixed(1);
+    const pct   = (currentProbs[i] * 100).toFixed(1);
     const color = COLORS[i % COLORS.length];
     const tr    = document.createElement('tr');
     tr.innerHTML = `
@@ -259,14 +301,195 @@ function render(T) {
       <td class="td-score">${score}</td>
       <td class="td-pct" style="color:${color};padding-right:6px">${pct}%</td>
       <td style="padding-left:0;padding-right:16px;width:35%">
-        <div class="bar-wrap">
-          <div class="bar-fill" style="width:${pct}%;background:${color}"></div>
-        </div>
+        <div class="bar-wrap"><div class="bar-fill" style="width:${pct}%;background:${color}"></div></div>
       </td>
       <td class="td-tickets">${tickets[i]}장</td>
     `;
     tbody.appendChild(tr);
   });
+
+  drawWheelAt(wheelRotation);
+}
+
+/* ── 돌림판 그리기 ── */
+function drawWheelAt(rotation) {
+  const canvas = document.getElementById('wheel-canvas');
+  if (!canvas || !currentProbs.length) return;
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width, H = canvas.height;
+  const cx = W / 2, cy = H / 2 + 10;
+  const r  = Math.min(W, H - 40) / 2 - 10;
+
+  ctx.clearRect(0, 0, W, H);
+
+  // 세그먼트
+  let startAngle = rotation - Math.PI / 2;
+  currentProbs.forEach((prob, i) => {
+    const slice = prob * 2 * Math.PI;
+    const end   = startAngle + slice;
+    const color = COLORS[i % COLORS.length];
+
+    ctx.beginPath();
+    ctx.moveTo(cx, cy);
+    ctx.arc(cx, cy, r, startAngle, end);
+    ctx.closePath();
+    ctx.fillStyle = color;
+    ctx.fill();
+    ctx.strokeStyle = '#0f0f13';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+
+    // 텍스트 (세그먼트가 충분히 클 때)
+    if (slice > 0.18) {
+      const mid  = startAngle + slice / 2;
+      const tx   = cx + Math.cos(mid) * r * 0.65;
+      const ty   = cy + Math.sin(mid) * r * 0.65;
+      const fs   = Math.max(10, Math.min(15, slice * 12));
+
+      ctx.save();
+      ctx.translate(tx, ty);
+      ctx.rotate(mid + Math.PI / 2);
+      ctx.fillStyle = '#fff';
+      ctx.font = `bold ${fs}px -apple-system, sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.shadowColor = 'rgba(0,0,0,0.6)';
+      ctx.shadowBlur  = 3;
+      ctx.fillText(names[i], 0, 0);
+      ctx.restore();
+    }
+
+    startAngle = end;
+  });
+
+  // 중심 원
+  ctx.beginPath();
+  ctx.arc(cx, cy, 14, 0, 2 * Math.PI);
+  ctx.fillStyle = '#1a1a22';
+  ctx.strokeStyle = '#3a3a48';
+  ctx.lineWidth = 2;
+  ctx.fill();
+  ctx.stroke();
+
+  // 포인터 삼각형 (위쪽 고정)
+  const px = cx, py = cy - r - 2;
+  ctx.beginPath();
+  ctx.moveTo(px, py);
+  ctx.lineTo(px - 11, py - 22);
+  ctx.lineTo(px + 11, py - 22);
+  ctx.closePath();
+  ctx.fillStyle = '#ffffff';
+  ctx.shadowColor = 'rgba(0,0,0,0.6)';
+  ctx.shadowBlur  = 8;
+  ctx.fill();
+  ctx.shadowBlur  = 0;
+}
+
+/* ── 돌리기 ── */
+function spin() {
+  if (isSpinning || !currentProbs.length) return;
+  isSpinning = true;
+  document.getElementById('spin-btn').disabled = true;
+  document.getElementById('winner-display').innerHTML = '';
+
+  // 가중치 기반 당첨자 선택
+  const r = Math.random();
+  let cum = 0, winnerIdx = currentProbs.length - 1;
+  for (let i = 0; i < currentProbs.length; i++) {
+    cum += currentProbs[i];
+    if (r < cum) { winnerIdx = i; break; }
+  }
+
+  // 당첨 세그먼트 중간 각도 계산 (휠 공간, 12시 기준 시계방향)
+  let wStart = 0;
+  for (let i = 0; i < winnerIdx; i++) wStart += currentProbs[i] * 2 * Math.PI;
+  const wSlice   = currentProbs[winnerIdx] * 2 * Math.PI;
+  const landing  = wStart + wSlice * (0.2 + Math.random() * 0.6); // 세그먼트 내 랜덤 위치
+
+  // 포인터(12시)가 landing에 오려면 필요한 rotation
+  // 포인터가 가리키는 휠 각도 = (2π - rotation % 2π) % 2π
+  const TAU          = 2 * Math.PI;
+  const fullSpins    = (6 + Math.floor(Math.random() * 5)) * TAU;
+  const normCurrent  = ((wheelRotation % TAU) + TAU) % TAU;
+  const desiredMod   = (TAU - landing % TAU + TAU) % TAU;
+  let delta          = desiredMod - normCurrent;
+  if (delta < 0) delta += TAU;
+
+  const startRot  = wheelRotation;
+  const targetRot = wheelRotation + fullSpins + delta;
+  const duration  = 3800 + Math.random() * 800;
+  const startTime = performance.now();
+
+  function animate(now) {
+    const t      = Math.min((now - startTime) / duration, 1);
+    const eased  = 1 - Math.pow(1 - t, 4); // ease-out quart
+    wheelRotation = startRot + (targetRot - startRot) * eased;
+    drawWheelAt(wheelRotation);
+
+    if (t < 1) {
+      requestAnimationFrame(animate);
+    } else {
+      wheelRotation = targetRot;
+      isSpinning    = false;
+      document.getElementById('spin-btn').disabled = false;
+      showWinner(winnerIdx);
+    }
+  }
+  requestAnimationFrame(animate);
+}
+
+/* ── 시뮬레이션 ── */
+function weightedPick(probs) {
+  const r = Math.random();
+  let cum = 0;
+  for (let i = 0; i < probs.length; i++) {
+    cum += probs[i];
+    if (r < cum) return i;
+  }
+  return probs.length - 1;
+}
+
+function runSimulation() {
+  if (!currentProbs.length) return;
+  const N = 10000;
+  const counts = new Array(currentProbs.length).fill(0);
+  for (let i = 0; i < N; i++) counts[weightedPick(currentProbs)]++;
+
+  const rows = names.map((name, i) => {
+    const expected = (currentProbs[i] * 100).toFixed(2);
+    const actual   = (counts[i] / N * 100).toFixed(2);
+    const diff     = Math.abs(currentProbs[i] * 100 - counts[i] / N * 100);
+    const cls      = diff < 1.5 ? 'sim-ok' : 'sim-warn';
+    const color    = COLORS[i % COLORS.length];
+    return `<tr>
+      <td><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${color};margin-right:7px;vertical-align:middle"></span>${name}</td>
+      <td>${scores[i]}</td>
+      <td>${expected}%</td>
+      <td class="${cls}">${actual}%</td>
+      <td>${counts[i].toLocaleString()}</td>
+    </tr>`;
+  }).join('');
+
+  document.getElementById('sim-display').innerHTML = `
+    <div class="sim-info">${N.toLocaleString()}회 시뮬레이션 결과 — 오차 1.5%p 이내 <span class="sim-ok">●</span>, 초과 <span class="sim-warn">●</span></div>
+    <table class="sim-table">
+      <thead><tr><th>후보</th><th>점수</th><th>기댓값</th><th>실측</th><th>당첨 횟수</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+  document.getElementById('winner-display').innerHTML = '';
+
+  // 시뮬레이션 확인 후 자동으로 실제 추첨
+  setTimeout(() => spin(), 600);
+}
+
+function showWinner(idx) {
+  const color = COLORS[idx % COLORS.length];
+  document.getElementById('winner-display').innerHTML = `
+    <div class="winner-box" style="border-color:${color}">
+      <span class="winner-label">당첨</span>
+      <span class="winner-name" style="color:${color}">${names[idx]}</span>
+      <span class="winner-score">${scores[idx]}점</span>
+    </div>`;
 }
 
 calculate();
