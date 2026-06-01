@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>추첨권 계산기</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  background: #0f0f13;
+  color: #e0e0e0;
+  min-height: 100vh;
+  padding: 40px 16px;
+}
+.container { max-width: 660px; margin: 0 auto; }
+h1 { font-size: 1.3rem; font-weight: 600; margin-bottom: 24px; color: #fff; }
+
+.card {
+  background: #1a1a22;
+  border: 1px solid #2a2a35;
+  border-radius: 12px;
+  padding: 20px;
+  margin-bottom: 14px;
+}
+
+.section-label {
+  font-size: 0.72rem;
+  color: #666;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  display: block;
+  margin-bottom: 10px;
+}
+
+input[type="text"] {
+  width: 100%;
+  background: #0f0f13;
+  border: 1px solid #2a2a35;
+  border-radius: 8px;
+  color: #e0e0e0;
+  font-size: 0.95rem;
+  padding: 10px 14px;
+  outline: none;
+  transition: border-color 0.15s;
+}
+input[type="text"]:focus { border-color: #5b6af0; }
+
+.row { display: flex; gap: 10px; align-items: center; margin-top: 10px; }
+
+button {
+  background: #5b6af0;
+  color: white;
+  border: none;
+  border-radius: 8px;
+  padding: 10px 18px;
+  font-size: 0.88rem;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s;
+}
+button:hover { background: #6b7af8; }
+button.ghost {
+  background: #23232e;
+  color: #aaa;
+  border: 1px solid #2a2a35;
+}
+button.ghost:hover { background: #2e2e3c; color: #ddd; }
+
+.slider-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 10px 0 6px;
+}
+.slider-label { font-size: 0.78rem; color: #444; white-space: nowrap; }
+input[type="range"] {
+  flex: 1;
+  accent-color: #5b6af0;
+  cursor: pointer;
+}
+.t-value {
+  font-family: 'SF Mono', 'Fira Mono', monospace;
+  font-size: 0.9rem;
+  color: #5b6af0;
+  min-width: 88px;
+  text-align: right;
+}
+.auto-hint {
+  font-size: 0.76rem;
+  color: #444;
+  margin-top: 4px;
+}
+.auto-hint span { color: #5b6af0; }
+
+table { width: 100%; border-collapse: collapse; }
+th {
+  font-size: 0.72rem;
+  color: #555;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 0 12px 10px;
+  text-align: left;
+}
+th:last-child { text-align: right; }
+td { padding: 11px 12px; border-top: 1px solid #1e1e28; vertical-align: middle; }
+.td-name { font-weight: 600; color: #fff; }
+.td-score { font-family: monospace; color: #666; font-size: 0.92rem; }
+.td-pct { font-family: monospace; font-weight: 700; font-size: 1rem; }
+.td-tickets { font-family: monospace; color: #888; text-align: right; white-space: nowrap; }
+
+.bar-wrap {
+  background: #0f0f13;
+  border-radius: 4px;
+  height: 6px;
+  overflow: hidden;
+  margin-top: 5px;
+  min-width: 60px;
+}
+.bar-fill { height: 100%; border-radius: 4px; transition: width 0.25s ease; }
+
+.error { color: #f06b6b; font-size: 0.82rem; margin-top: 8px; min-height: 18px; }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>추첨권 계산기</h1>
+
+  <div class="card">
+    <span class="section-label">점수 입력</span>
+    <input type="text" id="scores-input" placeholder="-55, -420" value="-55, -420" />
+    <div class="row">
+      <input type="text" id="names-input" placeholder="후보 이름 (선택 · 쉼표로 구분)" style="flex:1" />
+      <button onclick="calculate()">계산</button>
+    </div>
+    <div class="error" id="error"></div>
+  </div>
+
+  <div class="card">
+    <span class="section-label">T 값 조절</span>
+    <div class="slider-row">
+      <span class="slider-label">균등</span>
+      <input type="range" id="t-slider" min="0" max="1000" value="500" oninput="onSlider()" />
+      <span class="slider-label">차등</span>
+      <span class="t-value" id="t-display">—</span>
+    </div>
+    <div class="auto-hint" id="auto-hint"></div>
+    <div class="row" style="margin-top:14px">
+      <button class="ghost" onclick="autoT()">권장 T 자동 설정</button>
+    </div>
+  </div>
+
+  <div class="card" id="result-card" style="display:none">
+    <span class="section-label">결과 (100장 기준)</span>
+    <table>
+      <thead>
+        <tr>
+          <th>후보</th>
+          <th>점수</th>
+          <th colspan="2">당첨 확률</th>
+          <th>추첨권</th>
+        </tr>
+      </thead>
+      <tbody id="result-body"></tbody>
+    </table>
+  </div>
+</div>
+
+<script>
+const COLORS = ['#5b6af0','#f06b6b','#4ecb8d','#f0b84e','#c06bf0','#4ec5f0','#f07840'];
+
+let scores = [];
+let names  = [];
+
+function parseScores() {
+  const raw = document.getElementById('scores-input').value;
+  const parts = raw.split(',').map(s => s.trim()).filter(Boolean);
+  if (parts.length < 2) throw new Error('후보가 2명 이상이어야 합니다');
+  const parsed = parts.map(Number);
+  if (parsed.some(isNaN)) throw new Error('숫자만 입력해주세요 (예: -55, -420)');
+  if (parsed.some(s => s >= 0)) throw new Error('모든 점수는 음수여야 합니다');
+  return parsed;
+}
+
+function parseNames(count) {
+  const raw = document.getElementById('names-input').value.trim();
+  if (!raw) return Array.from({length: count}, (_, i) => String.fromCharCode(65 + i));
+  const parts = raw.split(',').map(s => s.trim());
+  return Array.from({length: count}, (_, i) => parts[i] || String.fromCharCode(65 + i));
+}
+
+function softmax(scores, T) {
+  const scaled = scores.map(s => s * T);
+  const maxVal  = Math.max(...scaled);
+  const exps    = scaled.map(s => Math.exp(s - maxVal));
+  const sum     = exps.reduce((a, b) => a + b, 0);
+  return exps.map(e => e / sum);
+}
+
+// log scale: slider 0 → T=1e-6 / slider 1000 → T=0.1
+function sliderToT(v) { return Math.pow(10, v / 1000 * 5 - 6); }
+function tToSlider(T) { return Math.round((Math.log10(T) + 6) / 5 * 1000); }
+
+function autoT() {
+  if (!scores.length) { calculate(); return; }
+  const abss = scores.map(Math.abs);
+  const diff  = Math.max(...abss) - Math.min(...abss);
+  if (diff === 0) return;
+  const T  = 1 / diff;
+  const sv = Math.max(0, Math.min(1000, tToSlider(T)));
+  document.getElementById('t-slider').value = sv;
+  onSlider();
+}
+
+function onSlider() {
+  const T = sliderToT(+document.getElementById('t-slider').value);
+  document.getElementById('t-display').textContent = T.toExponential(3);
+  if (scores.length) render(T);
+}
+
+function calculate() {
+  document.getElementById('error').textContent = '';
+  try {
+    scores = parseScores();
+    names  = parseNames(scores.length);
+
+    const abss   = scores.map(Math.abs);
+    const diff   = Math.max(...abss) - Math.min(...abss);
+    const autoTv = diff > 0 ? 1 / diff : null;
+    document.getElementById('auto-hint').innerHTML = autoTv
+      ? `권장 T: <span>${autoTv.toExponential(3)}</span>  —  점수 범위(${diff})에서 자동 계산`
+      : '';
+
+    document.getElementById('result-card').style.display = 'block';
+
+    // 처음 계산 시 권장 T로 슬라이더 세팅
+    if (autoTv) {
+      const sv = Math.max(0, Math.min(1000, tToSlider(autoTv)));
+      document.getElementById('t-slider').value = sv;
+    }
+    onSlider();
+  } catch (e) {
+    document.getElementById('error').textContent = e.message;
+  }
+}
+
+function render(T) {
+  const probs   = softmax(scores, T);
+  const tickets = probs.map(p => Math.round(p * 100));
+  const tbody   = document.getElementById('result-body');
+  tbody.innerHTML = '';
+
+  scores.forEach((score, i) => {
+    const pct   = (probs[i] * 100).toFixed(1);
+    const color = COLORS[i % COLORS.length];
+    const tr    = document.createElement('tr');
+    tr.innerHTML = `
+      <td class="td-name">${names[i]}</td>
+      <td class="td-score">${score}</td>
+      <td class="td-pct" style="color:${color};padding-right:6px">${pct}%</td>
+      <td style="padding-left:0;padding-right:16px;width:35%">
+        <div class="bar-wrap">
+          <div class="bar-fill" style="width:${pct}%;background:${color}"></div>
+        </div>
+      </td>
+      <td class="td-tickets">${tickets[i]}장</td>
+    `;
+    tbody.appendChild(tr);
+  });
+}
+
+calculate();
+</script>
+</body>
+</html>
